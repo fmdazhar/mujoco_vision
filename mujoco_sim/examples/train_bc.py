@@ -10,34 +10,33 @@ from absl import app, flags
 from flax.training import checkpoints
 import os
 import pickle as pkl
-from gymnasium.wrappers.record_episode_statistics import RecordEpisodeStatistics
-
-from algo.agents.continuous.bc import BCAgent
-
-from algo.utils.launcher import (
+import gymnasium
+from gymnasium.wrappers import RecordEpisodeStatistics 
+from typing import List
+from mujoco_sim.algo.agents.continuous.bc import BCAgent
+import mujoco
+import mujoco_sim
+from mujoco_sim.algo.utils.launcher import (
     make_bc_agent,
     make_trainer_config,
     make_wandb_logger,
 )
-from algo.data.data_store import MemoryEfficientReplayBufferDataStore
+from mujoco_sim.algo.data.data_store import MemoryEfficientReplayBufferDataStore
 
-from experiments.mappings import CONFIG_MAPPING
-from experiments.config import DefaultTrainingConfig
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string("exp_name", None, "Name of experiment corresponding to folder.")
+flags.DEFINE_string("exp_name", "PegInHoleFixed", "Name of experiment corresponding to folder.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_string("ip", "localhost", "IP address of the learner.")
-flags.DEFINE_string("bc_checkpoint_path", None, "Path to save checkpoints.")
-flags.DEFINE_integer("eval_n_trajs", 0, "Number of trajectories to evaluate.")
-flags.DEFINE_integer("train_steps", 20_000, "Number of pretraining steps.")
+flags.DEFINE_string("bc_checkpoint_path", "/home/fmdazhar/ws/internship/mujoco_state/mujoco_sim/examples/checkpoint", "Path to save checkpoints.")
+flags.DEFINE_integer("eval_n_trajs", 5, "Number of trajectories to evaluate.")
+flags.DEFINE_integer("train_steps", 200_000, "Number of pretraining steps.")
 flags.DEFINE_bool("save_video", False, "Save video of the evaluation.")
 
 
 flags.DEFINE_boolean(
     "debug", False, "Debug mode."
 )  # debug mode will disable wandb logging
-
 
 devices = jax.local_devices()
 num_devices = len(devices)
@@ -68,14 +67,16 @@ def eval(
         obs, _ = env.reset()
         done = False
         start_time = time.time()
-        while not done:
+        while True:
             rng, key = jax.random.split(sampling_rng)
 
             actions = bc_agent.sample_actions(observations=obs, seed=key)
             actions = np.asarray(jax.device_get(actions))
             next_obs, reward, done, truncated, info = env.step(actions)
+
             obs = next_obs
-            if done:
+            if done or truncated:
+                print("done")
                 if reward:
                     dt = time.time() - start_time
                     time_list.append(dt)
@@ -83,6 +84,7 @@ def eval(
                 success_counter += reward
                 print(reward)
                 print(f"{success_counter}/{episode + 1}")
+                break  # Exit the loop since the episode has ended.
 
     print(f"success rate: {success_counter / FLAGS.eval_n_trajs}")
     print(f"average time: {np.mean(time_list)}")
@@ -94,13 +96,14 @@ def eval(
 def train(
     bc_agent: BCAgent,
     bc_replay_buffer,
-    config: DefaultTrainingConfig,
     wandb_logger=None,
-):
+    batch_size: int = 256,
+    log_period: int = 10,
+    ):
 
     bc_replay_iterator = bc_replay_buffer.get_iterator(
         sample_args={
-            "batch_size": config.batch_size,
+            "batch_size": batch_size,
             "pack_obs_and_next_obs": False,
         },
         device=sharding.replicate(),
@@ -114,7 +117,7 @@ def train(
     ):
         batch = next(bc_replay_iterator)
         bc_agent, bc_update_info = bc_agent.update(batch)
-        if step % config.log_period == 0 and wandb_logger:
+        if step % log_period == 0 and wandb_logger:
             wandb_logger.log({"bc": bc_update_info}, step=step)
         if step > FLAGS.train_steps - 100 and step % 10 == 0:
             checkpoints.save_checkpoint(
@@ -127,24 +130,26 @@ def train(
 
 
 def main(_):
-    config: DefaultTrainingConfig = CONFIG_MAPPING[FLAGS.exp_name]()
+    batch_size: int = 64
+    image_keys= []
+    replay_buffer_capacity: int = 200000
+    encoder_type: str = "resnet-pretrained"
 
-    assert config.batch_size % num_devices == 0
-    assert FLAGS.exp_name in CONFIG_MAPPING, "Experiment folder not found."
+    assert batch_size % num_devices == 0
     eval_mode = FLAGS.eval_n_trajs > 0
-    env = config.get_environment(
-        fake_env=not eval_mode,
-        save_video=FLAGS.save_video,
-        classifier=True,
-    )
+
+    # Set render_mode conditionally
+    render_mode = "human" if eval_mode else "rgb_array"
+
+    env = gymnasium.make("ur5ePegInHoleFixedGymEnv_state-v0", render_mode=render_mode)
     env = RecordEpisodeStatistics(env)
 
     bc_agent: BCAgent = make_bc_agent(
         seed=FLAGS.seed,
         sample_obs=env.observation_space.sample(),
         sample_action=env.action_space.sample(),
-        image_keys=config.image_keys,
-        encoder_type=config.encoder_type,
+        image_keys=image_keys,
+        encoder_type=encoder_type,
     )
 
     # replicate agent across devices
@@ -161,26 +166,28 @@ def main(_):
         bc_replay_buffer = MemoryEfficientReplayBufferDataStore(
             env.observation_space,
             env.action_space,
-            capacity=config.replay_buffer_capacity,
-            image_keys=config.image_keys,
+            capacity=replay_buffer_capacity,
+            image_keys=(),  # <-- empty tuple
         )
 
-        # set up wandb and logging
-        wandb_logger = make_wandb_logger(
-            project="hil-serl",
-            description=FLAGS.exp_name,
-            debug=FLAGS.debug,
-        )
+        # # set up wandb and logging
+        # wandb_logger = make_wandb_logger(
+        #     project="hil-serl",
+        #     description=FLAGS.exp_name,
+        #     debug=FLAGS.debug,
+        # )
 
+        wandb_logger = None
         demo_path = glob.glob(os.path.join(os.getcwd(), "demo_data", "*.pkl"))
         
-        assert demo_path is not []
+        assert demo_path, "No demo files found in the specified directory."
 
         for path in demo_path:
             with open(path, "rb") as f:
                 transitions = pkl.load(f)
                 for transition in transitions:
-                    if np.linalg.norm(transition['actions']) > 0.0:
+                    # if np.linalg.norm(transition['actions']) > 0.0:
+                        # transition["actions"] = transition["actions"][:6]
                         bc_replay_buffer.insert(transition)
         print(f"bc replay buffer size: {len(bc_replay_buffer)}")
 
@@ -190,7 +197,7 @@ def main(_):
             bc_agent=bc_agent,
             bc_replay_buffer=bc_replay_buffer,
             wandb_logger=wandb_logger,
-            config=config,
+            batch_size = batch_size,
         )
 
     else:

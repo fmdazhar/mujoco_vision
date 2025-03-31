@@ -11,37 +11,38 @@ from flax.training import checkpoints
 import os
 import copy
 import pickle as pkl
-from gymnasium.wrappers.record_episode_statistics import RecordEpisodeStatistics
+from gymnasium.wrappers import RecordEpisodeStatistics 
 from natsort import natsorted
-
-from algo.agents.continuous.sac import SACAgent
-from algo.agents.continuous.sac_hybrid_single import SACAgentHybridSingleArm
-from algo.agents.continuous.sac_hybrid_dual import SACAgentHybridDualArm
-from algo.utils.timer_utils import Timer
-from algo.utils.train_utils import concat_batches
+import mujoco_sim
+import gymnasium
+from mujoco_sim.algo.agents.continuous.sac import SACAgent
+from mujoco_sim.algo.agents.continuous.sac_hybrid_single import SACAgentHybridSingleArm
+from mujoco_sim.algo.agents.continuous.sac_hybrid_dual import SACAgentHybridDualArm
+from mujoco_sim.algo.utils.timer_utils import Timer
+from mujoco_sim.algo.utils.train_utils import concat_batches
 
 from agentlace.trainer import TrainerServer, TrainerClient
 from agentlace.data.data_store import QueuedDataStore
 
-from algo.utils.launcher import (
+from mujoco_sim.algo.utils.launcher import (
     make_sac_pixel_agent,
     make_sac_pixel_agent_hybrid_single_arm,
     make_sac_pixel_agent_hybrid_dual_arm,
     make_trainer_config,
     make_wandb_logger,
 )
-from algo.data.data_store import MemoryEfficientReplayBufferDataStore
+from mujoco_sim.algo.data.data_store import MemoryEfficientReplayBufferDataStore
 
 from experiments.mappings import CONFIG_MAPPING
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string("exp_name", None, "Name of experiment corresponding to folder.")
+flags.DEFINE_string("exp_name", "ram_insertion", "Name of experiment corresponding to folder.")
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_boolean("learner", False, "Whether this is a learner.")
 flags.DEFINE_boolean("actor", False, "Whether this is an actor.")
 flags.DEFINE_string("ip", "localhost", "IP address of the learner.")
-flags.DEFINE_multi_string("demo_path", None, "Path to the demo data.")
+flags.DEFINE_multi_string("demo_path", "/home/fmdazhar/ws/internship/mujoco_state/mujoco_sim/examples/demo_data/converted_demo.pkl", "Path to the demo data.")
 flags.DEFINE_string("checkpoint_path", None, "Path to save checkpoints.")
 flags.DEFINE_integer("eval_checkpoint_step", 0, "Step to evaluate the checkpoint.")
 flags.DEFINE_integer("eval_n_trajs", 0, "Number of trajectories to evaluate.")
@@ -371,9 +372,8 @@ def main(_):
     env = config.get_environment(
         fake_env=FLAGS.learner,
         save_video=FLAGS.save_video,
-        classifier=True,
+        classifier=False,
     )
-    env = RecordEpisodeStatistics(env)
 
     rng, sampling_rng = jax.random.split(rng)
     

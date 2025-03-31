@@ -136,30 +136,5 @@ class TrainConfig(DefaultTrainingConfig):
         render_mode = "human"
         env = gymnasium.make("ur5ePegInHoleFixedGymEnv_state-v0", render_mode=render_mode)
         env = RecordEpisodeStatistics(env)
-        # env = RAMEnv(
-        #     fake_env=fake_env,
-        #     save_video=save_video,
-        #     config=EnvConfig(),
-        # )
-        # env = GripperCloseEnv(env)
-        # if not fake_env:
-        #     env = SpacemouseIntervention(env)
-        # env = RelativeFrame(env)
-        # env = Quat2EulerWrapper(env)
-        # env = SERLObsWrapper(env, proprio_keys=self.proprio_keys)
-        # env = ChunkingWrapper(env, obs_horizon=1, act_exec_horizon=None)
-        # if classifier:
-        #     classifier = load_classifier_func(
-        #         key=jax.random.PRNGKey(0),
-        #         sample=env.observation_space.sample(),
-        #         image_keys=self.classifier_keys,
-        #         checkpoint_path=os.path.abspath("classifier_ckpt/"),
-        #     )
 
-        #     def reward_func(obs):
-        #         sigmoid = lambda x: 1 / (1 + jnp.exp(-x))
-        #         # added check for z position to further robustify classifier, but should work without as well
-        #         return int(sigmoid(classifier(obs)) > 0.85 and obs['state'][0, 6] > 0.04)
-
-        #     env = MultiCameraBinaryRewardClassifierWrapper(env, reward_func)
         return env
