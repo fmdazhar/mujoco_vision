@@ -103,8 +103,7 @@ python mujoco_sim/examples/train_rlpd.py \
 
 # Installation:
 
-- From `serl` folder, cd into `mujoco_sim`.
-- In your `serl` conda environment, run `pip install -e .` to install this package.
+- run `pip install -e .` to install this package.
 - run `pip install -r requirements.txt` to install sim dependencies.
 
 # Explore the Environments
